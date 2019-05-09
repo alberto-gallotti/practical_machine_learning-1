@@ -1,0 +1,105 @@
+---
+title: "Practical Machine Learning"
+author: "Elmerys"
+date: "5/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(rattle)
+```
+
+# Introduction
+
+This report uses results first publish in the paper from *Velloso et al.* [^1]. In that study, different subjects performed weight lifting exercises wearing 4 movement sensors on the arm, on the forearm, on the belt and on the dumbbell. The subjects performed the exercise in 5 different manners reported in the *classe* variable of the dataset: A corresponds to the exercise performed properly whereas B/C/D/E correspond to unproper exercise. 
+
+In this report we are going to use the data set to predict setup a model that can predict the way the exercise was performed (which classe A/B/C/D/E)
+
+[^1]:http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf
+
+# Loading data and cleaning
+
+The dataset contains a lot of empty cells. These cells are all in the same columns as they correspond to features extracted from the raw data by *Velloso et al.*. Even if these features would probably be more accurate predictors than the raw data we don't have these predictors in the testing data set and thus are not going to use them in this report. We will thus remove these columns from the data set and keep only the raw readings from the four sensors.
+
+```{r loading_cleaning,echo=T}
+training <- read.csv("Data/pml-training.csv")
+training <- training[,-(grep("^skewness|^kurtosis|^max|^min|^amplitude|^var|^avg|^stddev",colnames(training)))]
+testing <- read.csv("Data/pml-testing.csv")
+testing <- testing[,-(grep("^skewness|^kurtosis|^max|^min|^amplitude|^var|^avg|^stddev",colnames(testing)))]
+```
+
+The training and the testing dataset have at this point 60 variables. However, not all of them are good predictors. Some of them are obviously not going to correlate with the classe variable. 
+
+- The first column X contains an identifier
+- The second column contains the name of the subject
+- The three next columns contain time variables. These could be useful if we where looking at time pattern to predict the class. However, the testing set only contains one row at a given time for each sample. We will thus disregard these columns
+- Column new_window and num_window contain variable that are used for the time analysis and that are useless here.
+
+We will thus remove these 7 columns at the begining of the data frame.
+
+```{r cleaning_2,echo=T}
+training <- training[,8:60]
+testing <- testing[,8:60]
+```
+
+# Partitioning the training data set
+
+The cleaned training data set will be partitioned in a training set and a validation set. We will only use the test set at the very end to predict the classe variable. This will prevent us to overfit on the test set. We will keep 20% of the training data set for validation. We set a seed at 9583568 to keep result reproducible.
+
+```{r data_split,echo=T}
+set.seed(9583568)
+inTrain <- createDataPartition(training$classe,p=0.8,list=F)
+training_2 <- training[inTrain,]
+validation <- training[-inTrain,]
+```
+
+# Random Forest training
+
+We are now training a random forest algorithm to predict the classe variable. We limit the number of resampling operation to 3 to gain some time and the K-fold cross validation method for resampling. It takes a little while because there are a lot of samples (15699).
+
+```{r training_RF,echo=F}
+model <- train(classe~.,method="rf",data=training_2, trControl = trainControl(method = "cv",number=3, verboseIter = T))
+```
+
+```{r inerror,echo=T}
+model$results
+```
+
+The best tune use 27 variables to get the best accuracy of `r round(model$results$Accuracy[2]*100,digit=2)`%. The in sample error is `r round((1-model$results$Accuracy[2]),digit=2)`%.
+
+
+# Cross validation
+
+We now use the validation data set to estimate the cross validation of our model and the out of sample error:
+
+```{r crossvalidation,echo=T}
+pred_val <- predict(model,validation)
+cf_matrix_pred <- confusionMatrix(pred_val,validation$classe)
+cf_matrix_pred$overall
+```
+
+The prediction accuracy `r round(cf_matrix_pred$overall[1]*100,digit=2)`% which means the out-of-sample error is `r round((1-cf_matrix_pred$overall[1])*100,digit=2)`%  and as you can see in @ref{fig:predmat} we are indeed very good at predicting on the validation data set.
+
+```{r predmat,echo=T}
+confmat_dataframe <- as.data.frame(cf_matrix_pred$table)
+ggplot()+
+  geom_tile(data=confmat_dataframe,aes(x=Reference,y=Prediction,fill=Freq/sum(Freq)*100))+
+  geom_text(data=confmat_dataframe,aes(x=Reference,y=Prediction,label=round(Freq/sum(Freq)*100,digit=2)))+
+  labs(x="True values",y="Predictions")+
+  scale_fill_gradient(name="",low="white",high="gray")
+```
+
+# Prediction on the testing data set:
+
+Now that we have a model that can predict accurately the results on the validation data set we are goind to predict results on the testing data set for the quiz.
+
+```{r testing,echo=T}
+pred_test <- predict(model,testing)
+pred_test
+```
+
